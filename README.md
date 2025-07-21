@@ -1,10 +1,9 @@
-# Transit
-Software Engineering Group-Transit
-
-Creates a map with pinpointed user location. This works by using a premade map library to display a map that we can use for our application.
+# Transit Code: Real-Time Bus Route Visualizer
 
 
-Release Notes:
+This application is a smpile Flask wep app that allows users to input their location, and view nearby and stops on an interactive map. 
+The map is genrated using the folium library and displays:
 
-So far, we have implemented a working map with a pinpointed user location.
-We need to look into the pinpointer not pinpointing the correct location.
+- The user’s current location as a marker.
+- Bus routes drawn from a `bus_routes.csv` file.
+- Bus stops shown with green bus icons and labeled with stop names.
