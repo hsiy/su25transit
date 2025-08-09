@@ -1,2 +1,0 @@
-The location tracker was implemented using 2 libraries (flask and folium) and accurately can pin a users location on a map as long as the user's device is sharing its location.
-This task was completed using the help of an online tutorial: https://youtu.be/ZVfeIWk6974?si=GKrx1Fqk5RNK6kxK
