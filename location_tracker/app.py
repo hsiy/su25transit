@@ -1,131 +1,226 @@
-
 import pandas as pd
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, jsonify
 import folium
 import os
+from datetime import datetime, timedelta
 import sqlite3
+
+# Path to the SQLite database
+base_path = os.path.dirname(__file__)
+db_path = os.path.join(base_path, 'transit_data.db')
+
+# Helper to load a table from the SQLite database
+def load_table(table_name):
+    with sqlite3.connect(db_path) as conn:
+        return pd.read_sql_query(f'SELECT * FROM {table_name}', conn)
+
+stop_times = load_table('stop_times')
+trips = load_table('trips')
+calendar = load_table('calendar')
+routes = load_table('routes')
+stops = load_table('stops')
+
+def expand_calendar(row):
+    days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+    start_date = datetime.strptime(str(row['start_date']), '%Y%m%d')
+    end_date = datetime.strptime(str(row['end_date']), '%Y%m%d')
+
+    dates = []
+    current = start_date
+    while current <= end_date:
+        if row[days[current.weekday()]] == 1:
+            dates.append(current.strftime('%Y-%m-%d'))
+        current += timedelta(days=1)
+    return dates
+
+calendar['service_dates'] = calendar.apply(expand_calendar, axis=1)
+calendar_expanded = calendar.explode('service_dates').reset_index(drop=True)
+calendar_expanded = calendar_expanded.rename(columns={'service_dates': 'service_date'})
+
+# Merge trips and routes once globally
+trips_routes = trips.merge(routes, on='route_id', how='left')
+# Merge stop_times with trips_routes
+merged = stop_times.merge(trips_routes[['trip_id', 'service_id', 'route_long_name']], on='trip_id', how='left')
+# Merge with calendar_expanded
+final = merged.merge(calendar_expanded, on='service_id', how='left')
+# Merge with stops info
+final = final.merge(stops[['stop_id', 'stop_name', 'stop_lat', 'stop_lon']], on='stop_id', how='left')
+
+# Parse datetime columns once globally
+final['arrival_datetime'] = pd.to_datetime(final['service_date'] + ' ' + final['arrival_time'], errors='coerce')
+final['departure_datetime'] = pd.to_datetime(final['service_date'] + ' ' + final['departure_time'], errors='coerce')
 
 app = Flask(__name__)
 
-# Serves as the homepage with a map where users can select their location
+@app.after_request
+def add_header(response):
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, public, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+def forecast(stop_id, route_name, return_only=False):
+    # Use the globally prepared 'final' DataFrame directly (no reloading or merging here)
+    df_specific = final[(final['stop_id'] == stop_id) & (final['route_long_name'] == route_name)].copy()
+    df_specific = df_specific.dropna(subset=['arrival_datetime'])
+
+    if df_specific.empty:
+        raise ValueError(f"No data found for stop_id={stop_id} and route_name='{route_name}'. "
+                         f"Available route names: {final['route_long_name'].unique()}, stop_ids: {final['stop_id'].unique()}")
+
+    df_specific['hour'] = df_specific['arrival_datetime'].dt.hour
+    df_specific['minute'] = df_specific['arrival_datetime'].dt.minute
+
+    minute_counts = df_specific.groupby(['hour', 'minute']).size().reset_index(name='count')
+    minute_counts['probability'] = minute_counts.groupby('hour')['count'].transform(lambda x: x / x.sum())
+
+    now = datetime.now()
+    current_time = now.time()
+    today_str = now.strftime('%Y-%m-%d')
+
+    df_today = df_specific[df_specific['service_date'] == today_str].copy()
+    df_today['time_only'] = df_today['arrival_datetime'].dt.time
+    df_upcoming = df_today[df_today['time_only'] > current_time]
+
+    if now.hour >= 23 or now.hour < 5:
+        next_arrival = datetime.combine(now.date() + timedelta(days=1 if now.hour >= 23 else 0), datetime.strptime("05:00", "%H:%M").time())
+    elif not df_upcoming.empty:
+        next_arrival = df_upcoming.sort_values(by='arrival_datetime').iloc[0]['arrival_datetime']
+    else:
+        next_arrival = datetime.combine(now.date() + timedelta(days=1), datetime.strptime("05:00", "%H:%M").time())
+
+    next_arrival_str = next_arrival.strftime('%Y-%m-%d %I:%M:%S %p')
+
+    if return_only:
+        return next_arrival_str
+    else:
+        print(f"Next bus is estimated to arrive at: {next_arrival_str}")
+        
 @app.route('/')
 def index():
     return render_template('index.html')
 
-@app.route('/map', methods=['POST'])
+@app.route('/map', methods=['POST', 'GET'])
 def map_view():
-    print("POST /map received")
+    print(f"{request.method} /map received")
     print("Form data:", request.form)
 
-    # Get latitude and longitude from the user input
-    latitude = float(request.form['latitude'])
-    longitude = float(request.form['longitude'])
+    latitude = float(request.form.get('latitude') or request.args.get('latitude'))
+    longitude = float(request.form.get('longitude') or request.args.get('longitude'))
+    selected_route_name = request.form.get('route_name') or request.args.get('route_name')
 
-    # Create a Folium map centered on the user's location
     m = folium.Map(location=[latitude, longitude], zoom_start=13)
     folium.Marker([latitude, longitude], popup='You are here').add_to(m)
 
-
     try:
-        # Connect to SQLite database
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        db_path = os.path.join(base_dir, 'transit_data.db')
-        conn = sqlite3.connect(db_path)
+        # Load from database instead of CSV
+        stops_df = load_table('stops')
+        routes_df = load_table('routes')
+        stop_times_df = load_table('stop_times')
+        trips_df = load_table('trips')
+        # shapes may not always exist, so handle gracefully
+        try:
+            shapes_df = load_table('shapes')
+        except Exception:
+            shapes_df = pd.DataFrame()
 
-        print(f"Loading GTFS data from database...")
+        trips_routes = trips_df.merge(routes_df, on='route_id', how='left')
 
-        stops_df = pd.read_sql_query("SELECT * FROM stops", conn)
-        routes_df = pd.read_sql_query("SELECT * FROM routes", conn)
-        stop_times_df = pd.read_sql_query("SELECT * FROM stop_times", conn)
+        all_routes = routes_df[['route_long_name']].drop_duplicates().rename(columns={'route_long_name': 'route_long_name'})
+        routes = all_routes.to_dict('records')
+        
+        colors = ['red', 'blue', 'green', 'purple', 'orange', 'darkred',
+                  'lightred', 'beige', 'darkblue', 'darkgreen']
 
-        print(f"Stops: {stops_df.shape}, Routes: {routes_df.shape}, Stop times: {stop_times_df.shape}")
+        if selected_route_name:
+            trips_routes = trips_routes[trips_routes['route_long_name'] == selected_route_name]
 
-        # Show all stops in Omaha (remove distance filter)
-        nearby_stops = stops_df
+        route_count = 0
+        for route_id in trips_routes['route_id'].unique():
+            route_info = routes_df[routes_df['route_id'] == route_id].iloc[0]
+            route_name = route_info['route_long_name']
+            route_color = f"#{route_info['route_color']}" if pd.notna(route_info.get('route_color')) else colors[route_count % len(colors)]
 
-        # Add stops to map
-        for _, stop in nearby_stops.iterrows():
-            folium.CircleMarker(
-                location=[stop['stop_lat'], stop['stop_lon']],
-                radius=4,
-                color='blue',
-                fillColor='lightblue',
-                fillOpacity=0.8,
-                popup=f"{stop['stop_name']}<br>ID: {stop['stop_id']}"
-            ).add_to(m)
+            shapes_for_route = trips_routes[trips_routes['route_id'] == route_id]['shape_id'].dropna().unique()
+            for shape_id in shapes_for_route:
+                shape_points = shapes_df[shapes_df['shape_id'] == shape_id].sort_values('shape_pt_sequence')
+                if len(shape_points) >= 2:
+                    coords = shape_points[['shape_pt_lat', 'shape_pt_lon']].values.tolist()
+                    folium.PolyLine(coords, color=route_color, weight=4, opacity=0.8,
+                                    popup=f"Route {route_name}").add_to(m)
 
-        # Load trips and shapes from database
-        trips_df = pd.read_sql_query("SELECT * FROM trips", conn)
-        if not trips_df.empty:
-            print(f"Trips: {trips_df.shape}")
+            stop_ids_for_route = stop_times_df[stop_times_df['trip_id'].isin(
+                trips_df[trips_df['route_id'] == route_id]['trip_id']
+            )]['stop_id'].unique()
 
-            shapes_df = pd.read_sql_query("SELECT * FROM shapes", conn)
-            if not shapes_df.empty:
-                print(f"Shapes: {shapes_df.shape}")
+            for _, stop in stops_df[stops_df['stop_id'].isin(stop_ids_for_route)].iterrows():
+                # Use route_name in popup link params
+                popup_html = f"""
+                <b>{stop['stop_name']}</b><br>
+                ID: {stop['stop_id']}<br>
+                <a href="#" onclick="
+                    fetch('/forecast_api?stop_id={stop['stop_id']}&route_name={route_name}')
+                        .then(res => res.json())
+                        .then(data => {{
+                            if (data.error) {{
+                                alert(data.error);
+                            }} else {{
+                                var w = window.open('', 'popup', 'width=300,height=200');
+                                w.document.write('<h2>Arrival Info</h2>');
+                                w.document.write('<b>Route:</b> ' + data.route_name + '<br>');
+                                w.document.write('<b>Stop ID:</b> ' + data.stop_id + '<br>');
+                                w.document.write('<b>Next Arrival:</b> ' + data.next_arrival);
+                                w.document.close();
+                            }}
+                        }});
+                    return false;
+                ">
+                Get arrival time</a>
+                """
 
-                # Define colors array
-                colors = ['red', 'blue', 'green', 'purple', 'orange', 'darkred', 'lightred', 'beige', 'darkblue', 'darkgreen']
+                folium.CircleMarker(
+                    location=[stop['stop_lat'], stop['stop_lon']],
+                    radius=4,
+                    color=route_color,
+                    fillColor=route_color,
+                    fillOpacity=0.8,
+                    popup=folium.Popup(popup_html, max_width=250)
+                ).add_to(m)
 
-                # Get unique routes and their shape.Links trips to routes to shapes
-                route_shapes = pd.merge(trips_df[['route_id', 'shape_id']].drop_duplicates(), 
-                                       shapes_df, on='shape_id', how='inner')
+            route_count += 1
 
-                # Debug: Check which routes have shapes vs which don't
-                all_route_ids = trips_df['route_id'].unique()
-                routes_with_shapes = route_shapes['route_id'].unique()
-                routes_without_shapes = set(all_route_ids) - set(routes_with_shapes)
+        map_html = m._repr_html_()
 
-                print(f"Total routes: {len(all_route_ids)}")
-                print(f"Routes with shapes: {len(routes_with_shapes)}")
-                print(f"Routes without shapes: {len(routes_without_shapes)}")
-                if routes_without_shapes:
-                    print(f"Missing shapes for routes: {list(routes_without_shapes)[:5]}...")
+        return render_template(
+            'map_display.html',
+            map_html=map_html,
+            routes=routes,
+            selected_route_name=selected_route_name,
+            request=request
+        )
 
-                route_count = 0
-                for route_id in route_shapes['route_id'].unique():
-                    route_data = route_shapes[route_shapes['route_id'] == route_id]
-
-                    for shape_id in route_data['shape_id'].unique():
-                        shape_points = route_data[route_data['shape_id'] == shape_id].sort_values('shape_pt_sequence')
-
-                        if len(shape_points) >= 2:
-                            coords = shape_points[['shape_pt_lat', 'shape_pt_lon']].values.tolist()
-
-                            route_info = routes_df[routes_df['route_id'] == route_id]
-                            if len(route_info) > 0:
-                                route_info = route_info.iloc[0]
-                                route_name = route_info['route_short_name']
-                                route_color = f"#{route_info['route_color']}"
-                            else:
-                                route_name = str(route_id)
-                                route_color = colors[route_count % len(colors)]
-
-                            folium.PolyLine(
-                                coords,
-                                color=route_color,
-                                weight=4,
-                                opacity=0.8,
-                                popup=f"Route {route_name}"
-                            ).add_to(m)
-
-                            print(f"Added route {route_name} shape {shape_id} with {len(shape_points)} points")
-
-                    route_count += 1
-            else:
-                print("shapes table not found or empty")
-        else:
-            print("trips table not found or empty")
-
-        print(f"Total routes drawn: {route_count}")
-
-        conn.close()
     except Exception as e:
         print(f"Error loading GTFS data: {e}")
+        return f"Error loading GTFS data: {e}", 500
 
-    # Pass the map HTML content directly to template
-    return render_template('map_display.html', map_html=m._repr_html_())
+@app.route('/forecast_api')
+def forecast_api():
+    stop_id = request.args.get('stop_id', type=int)
+    route_name = request.args.get('route_name', type=str)
+    if stop_id is None or not route_name:
+        return jsonify({'error': 'Missing stop_id or route_name'}), 400
+
+    try:
+        next_time = forecast(stop_id, route_name, return_only=True)
+        if not next_time:
+            return jsonify({'error': 'No forecast available for this stop/route'}), 404
+        return jsonify({
+            'stop_id': stop_id,
+            'route_name': route_name,
+            'next_arrival': next_time
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
-
-
