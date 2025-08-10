@@ -108,6 +108,9 @@ def map_view():
     latitude = float(request.form.get('latitude') or request.args.get('latitude'))
     longitude = float(request.form.get('longitude') or request.args.get('longitude'))
     selected_route_name = request.form.get('route_name') or request.args.get('route_name')
+    show_favorites_only = request.form.get('show_favorites_only') or request.args.get('show_favorites_only')
+    favorite_routes = request.form.get('favorite_routes') or request.args.get('favorite_routes')
+    favorite_routes_list = [r for r in (favorite_routes or '').split(',') if r]
 
     m = folium.Map(location=[latitude, longitude], zoom_start=13)
     folium.Marker([latitude, longitude], popup='You are here').add_to(m)
@@ -132,7 +135,10 @@ def map_view():
         colors = ['red', 'blue', 'green', 'purple', 'orange', 'darkred',
                   'lightred', 'beige', 'darkblue', 'darkgreen']
 
-        if selected_route_name:
+        # Filter for favorites if toggled
+        if show_favorites_only and favorite_routes_list:
+            trips_routes = trips_routes[trips_routes['route_long_name'].isin(favorite_routes_list)]
+        elif selected_route_name:
             trips_routes = trips_routes[trips_routes['route_long_name'] == selected_route_name]
 
         route_count = 0

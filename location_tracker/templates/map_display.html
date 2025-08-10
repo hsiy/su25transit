@@ -27,28 +27,288 @@
     </style>
 </head>
 <body>
+    <div id="route-select-topbar" style="width:100%;background:#f8f8f8;padding:10px 0 10px 0;box-shadow:0 2px 4px rgba(0,0,0,0.04);position:sticky;top:0;z-index:1100;">
+        <div style="max-width:900px;margin:0 auto;display:flex;align-items:center;gap:16px;">
+            <form action="/map" method="POST" id="route-form" style="display:inline;flex:1;">
+                <input type="hidden" name="latitude" value="{{ request.form.latitude or request.args.latitude or 41.2565 }}">
+                <input type="hidden" name="longitude" value="{{ request.form.longitude or request.args.longitude or -95.9345 }}">
+                <input type="hidden" name="show_favorites_only" id="show_favorites_only" value="{{ request.form.show_favorites_only or request.args.show_favorites_only or '' }}">
+                <input type="hidden" name="favorite_routes" id="favorite_routes" value="">
+                <input type="hidden" name="favorite_stops" id="favorite_stops" value="">
+                <div id="custom-route-dropdown" style="position:relative;display:inline-block;min-width:250px;">
+                    <button type="button" id="dropdown-btn" style="width:100%;text-align:left;padding:6px 12px;font-size:16px;border:1px solid #ccc;background:#fff;cursor:pointer;">
+                        <span id="dropdown-selected">-- Show All Routes --</span>
+                        <span id="dropdown-arrow" style="float:right;">&#9660;</span>
+                    </button>
+                    <div id="dropdown-list" style="display:none;position:absolute;z-index:1001;background:#fff;border:1px solid #ccc;max-height:200px;overflow-y:auto;width:100%;">
+                        <div class="dropdown-item" data-route="" style="padding:6px 12px;cursor:pointer;display:flex;align-items:center;">
+                            <span style="flex:1;">-- Show All Routes --</span>
+                        </div>
+                        {% for route in routes %}
+                        <div class="dropdown-item" data-route="{{ route['route_long_name'] }}" style="padding:6px 12px;cursor:pointer;display:flex;align-items:center;">
+                            <span style="flex:1;">{{ route['route_long_name'] }}</span>
+                            <span class="route-star" data-route="{{ route['route_long_name'] }}" style="font-size:20px;margin-left:8px;cursor:pointer;color:#888;">&#9734;</span>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                <input type="hidden" name="route_name" id="route_name_input" value="{{ selected_route_name or '' }}">
+            </form>
+            <button id="toggle-favorites-btn" type="button" style="margin-left:8px;padding:6px 16px;font-size:16px;cursor:pointer;background:#fff;border:1px solid #ccc;border-radius:4px;display:flex;align-items:center;gap:6px;">
+                <span id="toggle-fav-star" style="font-size:20px;color:#888;">&#9734;</span> Favorites
+            </button>
+            <a href="/" style="margin-left:16px;">Back to Location Input</a>
+        </div>
+    </div>
+
     <h1>Bus Routes</h1>
     {{ map_html|safe }}
 
-    <a href="/">Back to Location Input</a>
-
-    <div id="route-select-container">
-        <!-- Form submits to /map with POST -->
-        <form action="/map" method="POST">
-            <!-- Preserve location -->
-            <input type="hidden" name="latitude" value="{{ request.form.latitude or request.args.latitude or 41.2565 }}">
-            <input type="hidden" name="longitude" value="{{ request.form.longitude or request.args.longitude or -95.9345 }}">
-
-            <select id="route-select" name="route_name" onchange="this.form.submit()">
-                <option value="">-- Show All Routes --</option>
-                {% for route in routes %}
-                    <option value="{{ route['route_long_name'] }}"
-                        {% if selected_route_name == route['route_long_name'] %} selected {% endif %}>
-                        {{ route['route_long_name'] }}
-                    </option>
-                {% endfor %}
-            </select>
-        </form>
+    <div id="tabs-container" style="margin-top: 1em;">
+        <button id="tab-map" class="tab-btn" onclick="showTab('map')">Map</button>
+        <button id="tab-favorites" class="tab-btn" onclick="showTab('favorites')">Favorites</button>
     </div>
+
+    <div id="favorites-container" class="tab-content" data-tab="favorites" style="display:none;">
+        <h2>Your Favorites</h2>
+        <div id="favorites-list"></div>
+    </div>
+
+    <script>
+    // --- Tab logic ---
+    function showTab(tab) {
+        document.querySelectorAll('.tab-content').forEach(el => {
+            el.style.display = (el.getAttribute('data-tab') === tab) ? '' : 'none';
+        });
+        document.querySelectorAll('.tab-btn').forEach(el => {
+            el.style.background = (el.id === 'tab-' + tab) ? '#eee' : '';
+        });
+    }
+    // Default to map tab
+    showTab('map');
+
+    // --- Favorites logic ---
+    function getFavorites() {
+        return JSON.parse(localStorage.getItem('favorites') || '{"routes":[],"stops":[]}');
+    }
+    function setFavorites(favs) {
+        localStorage.setItem('favorites', JSON.stringify(favs));
+    }
+    function isRouteFavorite(routeName) {
+        return getFavorites().routes.includes(routeName);
+    }
+    function toggleRouteFavorite(routeName) {
+        let favs = getFavorites();
+        if (favs.routes.includes(routeName)) {
+            favs.routes = favs.routes.filter(r => r !== routeName);
+        } else {
+            favs.routes.push(routeName);
+        }
+        setFavorites(favs);
+        updateDropdownStars();
+        renderFavorites();
+    }
+    // --- Custom dropdown logic with favorites filter ---
+    const dropdownBtn = document.getElementById('dropdown-btn');
+    const dropdownList = document.getElementById('dropdown-list');
+    const dropdownSelected = document.getElementById('dropdown-selected');
+    const routeNameInput = document.getElementById('route_name_input');
+    const toggleFavBtn = document.getElementById('toggle-favorites-btn');
+    const toggleFavStar = document.getElementById('toggle-fav-star');
+    let showFavoritesOnly = false;
+
+    function closeDropdown() {
+        dropdownList.style.display = 'none';
+        document.removeEventListener('click', outsideClickListener);
+    }
+    function outsideClickListener(e) {
+        if (!dropdownList.contains(e.target) && e.target !== dropdownBtn) {
+            closeDropdown();
+        }
+    }
+    dropdownBtn.onclick = function(e) {
+        e.stopPropagation();
+        renderDropdownItems();
+        dropdownList.style.display = dropdownList.style.display === 'block' ? 'none' : 'block';
+        if (dropdownList.style.display === 'block') {
+            document.addEventListener('click', outsideClickListener);
+        }
+    };
+    dropdownList.addEventListener('click', function(e) {
+        const item = e.target.closest('.dropdown-item');
+        if (!item) return;
+        const route = item.getAttribute('data-route');
+        if (e.target.classList.contains('route-star')) {
+            // Star click
+            e.stopPropagation();
+            toggleRouteFavorite(route);
+            renderDropdownItems();
+        } else {
+            // Select route
+            dropdownSelected.textContent = route || '-- Show All Routes --';
+            routeNameInput.value = route;
+            closeDropdown();
+            document.getElementById('route-form').submit();
+        }
+    });
+    function updateDropdownStars() {
+        document.querySelectorAll('.route-star').forEach(star => {
+            const route = star.getAttribute('data-route');
+            if (isRouteFavorite(route)) {
+                star.innerHTML = '★';
+                star.style.color = 'gold';
+            } else {
+                star.innerHTML = '☆';
+                star.style.color = '#888';
+            }
+        });
+    }
+    function renderDropdownItems() {
+        // Rerender dropdown items based on showFavoritesOnly
+        const allItems = Array.from(dropdownList.querySelectorAll('.dropdown-item'));
+        const favs = getFavorites();
+        allItems.forEach(item => {
+            const route = item.getAttribute('data-route');
+            if (!route) {
+                item.style.display = showFavoritesOnly ? 'none' : '';
+            } else if (showFavoritesOnly && !favs.routes.includes(route)) {
+                item.style.display = 'none';
+            } else {
+                item.style.display = '';
+            }
+        });
+        updateDropdownStars();
+    }
+    toggleFavBtn.onclick = function() {
+        showFavoritesOnly = !showFavoritesOnly;
+        renderDropdownItems();
+    // Set hidden input and favorite routes/stops
+    document.getElementById('show_favorites_only').value = showFavoritesOnly ? '1' : '';
+    document.getElementById('favorite_routes').value = getFavorites().routes.join(',');
+    document.getElementById('favorite_stops').value = getFavorites().stops.map(s => s.id).join(',');
+        if (showFavoritesOnly) {
+            toggleFavStar.innerHTML = '★';
+            toggleFavStar.style.color = 'gold';
+            toggleFavBtn.style.background = '#ffe066';
+            toggleFavBtn.style.borderColor = '#ffd700';
+        } else {
+            toggleFavStar.innerHTML = '☆';
+            toggleFavStar.style.color = '#888';
+            toggleFavBtn.style.background = '#fff';
+            toggleFavBtn.style.borderColor = '#ccc';
+        }
+        // Submit form to update map
+        document.getElementById('route-form').submit();
+    };
+    // On page load, if show_favorites_only is set, set showFavoritesOnly and update dropdown
+    (function() {
+        const favFlag = document.getElementById('show_favorites_only').value;
+        if (favFlag === '1') {
+            showFavoritesOnly = true;
+            toggleFavStar.innerHTML = '★';
+            toggleFavStar.style.color = 'gold';
+            toggleFavBtn.style.background = '#ffe066';
+            toggleFavBtn.style.borderColor = '#ffd700';
+        }
+    })();
+    // Set initial selected
+    (function() {
+        const selected = routeNameInput.value;
+        dropdownSelected.textContent = selected || '-- Show All Routes --';
+        updateDropdownStars();
+    })();
+
+    // --- Favorites rendering ---
+    function renderFavorites() {
+        const favs = getFavorites();
+        let html = '';
+        if (favs.routes.length === 0 && favs.stops.length === 0) {
+            html = '<em>No favorites yet. Click the star on a route or stop to add.</em>';
+        }
+        if (favs.routes.length) {
+            html += '<b>Routes:</b><ul>' + favs.routes.map(r => `<li>${r} <span style="color:gold;">★</span></li>`).join('') + '</ul>';
+        }
+        if (favs.stops.length) {
+            html += '<b>Stops:</b><ul>' + favs.stops.map(s => `<li>${s.name} <span style="color:gold;">★</span></li>`).join('') + '</ul>';
+        }
+        document.getElementById('favorites-list').innerHTML = html;
+    }
+    renderFavorites();
+
+    // --- Global handler for stop popup stars ---
+    function isStopFavorite(stopId) {
+        return getFavorites().stops.some(s => s.id === stopId);
+    }
+    function toggleStopFavorite(stopId, stopName) {
+        let favs = getFavorites();
+        const idx = favs.stops.findIndex(s => s.id === stopId);
+        if (idx !== -1) {
+            favs.stops.splice(idx, 1);
+        } else {
+            favs.stops.push({id: stopId, name: stopName});
+        }
+        setFavorites(favs);
+        updateAllStopStars();
+        renderFavorites();
+    }
+    function updateAllStopStars() {
+        document.querySelectorAll('.stop-star').forEach(star => {
+            const stopId = star.getAttribute('data-stopid');
+            if (isStopFavorite(stopId)) {
+                star.innerHTML = '★';
+                star.style.color = 'gold';
+                star.title = 'Remove from favorites';
+            } else {
+                star.innerHTML = '☆';
+                star.style.color = '#888';
+                star.title = 'Add to favorites';
+            }
+        });
+    }
+    // Event delegation for dynamically created popups
+    document.body.addEventListener('pointerdown', function(e) {
+        if (e.target.classList.contains('stop-star')) {
+            const stopId = e.target.getAttribute('data-stopid');
+            const stopName = e.target.getAttribute('data-stopname');
+            toggleStopFavorite(stopId, stopName);
+            e.preventDefault();
+            e.stopPropagation();
+        }
+    });
+
+    // Debug: Listen for window messages (in case popups are interfering)
+    window.addEventListener('message', function(event) {
+        console.log('Window message:', event.data);
+    });
+
+    // --- Attach stop-star handler directly to popup content using Leaflet events ---
+    // No need for attachStopStarHandlerToPopup; event delegation handles clicks
+    // Wait for Leaflet to be available
+    function setupLeafletPopupHandler() {
+        if (window.L && L && L.DomEvent) {
+            // Find the map instance
+            var map = null;
+            for (var k in window) {
+                if (window[k] && window[k] instanceof L.Map) {
+                    map = window[k];
+                    break;
+                }
+            }
+            if (map) {
+                map.on('popupopen', function(e) {
+                    updateAllStopStars();
+                });
+            }
+        } else {
+            setTimeout(setupLeafletPopupHandler, 500);
+        }
+    }
+    setupLeafletPopupHandler();
+    // Update stars on map load and after popups open
+    setTimeout(updateAllStopStars, 500);
+    // Optionally, observe DOM changes to update stars
+    const observer = new MutationObserver(updateAllStopStars);
+    observer.observe(document.body, {childList: true, subtree: true});
+    </script>
 </body>
 </html>
