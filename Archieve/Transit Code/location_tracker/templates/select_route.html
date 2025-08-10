@@ -1,0 +1,13 @@
+<form action="/map" method="post">
+    <input type="hidden" name="latitude" value="{{ lat }}">
+    <input type="hidden" name="longitude" value="{{ lon }}">
+
+    <label for="route_select">Select Route:</label>
+    <select name="route_name" id="route_select">
+        {% for route in routes %}
+            <option value="{{ route.route_name }}">{{ route.route_name }}</option>
+        {% endfor %}
+    </select>
+
+    <button type="submit">Show Route</button>
+</form>

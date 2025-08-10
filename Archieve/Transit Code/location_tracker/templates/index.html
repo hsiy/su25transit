@@ -1,31 +1,68 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
+    <meta charset="utf-8" />
+    <title>Transit Tracker</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live Location</title>
-    <script>
-        function getLocation() {
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition(showPosition);
-            } else {
-                alert("Geolocation is not supported by this browser.");
-            }
-        }
 
-        function showPosition(position) {
-            // Send latitude and longitude to the server
-            document.getElementById('latitude').value = position.coords.latitude;
-            document.getElementById('longitude').value = position.coords.longitude;
-            document.getElementById('locationForm').submit();
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+    <style>
+        #map {
+            height: 500px;
+            width: 100%;
+            margin-bottom: 1em;
         }
-    </script>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 1em;
+        }
+        button {
+            padding: 0.5em 1em;
+            font-size: 16px;
+        }
+    </style>
 </head>
-<body onload="getLocation()">
-    <h1 style="text-align: center;">Fetching Your Location...</h1>
-    <form id="locationForm" method="POST" action="/map">
+<body>
+
+    <h1>Transit Tracker live 18</h1>
+    <div id="map"></div>
+
+    <!-- This form will fully reload the page after submission -->
+    <form action="/map" method="POST">
         <input type="hidden" id="latitude" name="latitude">
         <input type="hidden" id="longitude" name="longitude">
+        <button type="submit">Submit Location</button>
     </form>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+        let map = L.map('map').setView([41.2565, -95.9345], 13); // Default: Omaha
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 18,
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+
+        function setLocation(lat, lng) {
+            document.getElementById('latitude').value = lat;
+            document.getElementById('longitude').value = lng;
+            L.marker([lat, lng]).addTo(map).bindPopup("You are here").openPopup();
+            map.setView([lat, lng], 14);
+        }
+
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(function(position) {
+                setLocation(position.coords.latitude, position.coords.longitude);
+            }, function() {
+                alert("Unable to retrieve your location.");
+            });
+        } else {
+            alert("Geolocation is not supported by your browser.");
+        }
+    </script>
 </body>
 </html>
