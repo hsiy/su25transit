@@ -111,6 +111,8 @@ def map_view():
     show_favorites_only = request.form.get('show_favorites_only') or request.args.get('show_favorites_only')
     favorite_routes = request.form.get('favorite_routes') or request.args.get('favorite_routes')
     favorite_routes_list = [r for r in (favorite_routes or '').split(',') if r]
+    favorite_stops = request.form.get('favorite_stops') or request.args.get('favorite_stops')
+    favorite_stops_list = [s for s in (favorite_stops or '').split(',') if s]
 
     m = folium.Map(location=[latitude, longitude], zoom_start=13)
     folium.Marker([latitude, longitude], popup='You are here').add_to(m)
@@ -136,8 +138,12 @@ def map_view():
                   'lightred', 'beige', 'darkblue', 'darkgreen']
 
         # Filter for favorites if toggled
-        if show_favorites_only and favorite_routes_list:
-            trips_routes = trips_routes[trips_routes['route_long_name'].isin(favorite_routes_list)]
+        if show_favorites_only:
+            if favorite_routes_list:
+                trips_routes = trips_routes[trips_routes['route_long_name'].isin(favorite_routes_list)]
+            # If favorite stops are provided, filter stops_df
+            if favorite_stops_list:
+                stops_df = stops_df[stops_df['stop_id'].astype(str).isin(favorite_stops_list)]
         elif selected_route_name:
             trips_routes = trips_routes[trips_routes['route_long_name'] == selected_route_name]
 
@@ -160,9 +166,12 @@ def map_view():
             )]['stop_id'].unique()
 
             for _, stop in stops_df[stops_df['stop_id'].isin(stop_ids_for_route)].iterrows():
-                # Use route_name in popup link params
+                # Add a star for favoriting (handled by global JS in template)
                 popup_html = f"""
-                <b>{stop['stop_name']}</b><br>
+                <div style='display:flex;align-items:center;gap:8px;'>
+                  <span class='stop-star' data-stopid='{stop['stop_id']}' data-stopname='{stop['stop_name']}' style='cursor:pointer;font-size:22px;color:#888;' title='Add to favorites'>&#9734;</span>
+                  <b>{stop['stop_name']}</b>
+                </div>
                 ID: {stop['stop_id']}<br>
                 <a href="#" onclick="
                     fetch('/forecast_api?stop_id={stop['stop_id']}&route_name={route_name}')
