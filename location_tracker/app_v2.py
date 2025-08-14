@@ -190,7 +190,7 @@ def map_view():
         return render_template(
             "map_display_v2.html",
             map_html=map_html,
-            routes=routes,
+            routes=routes_list,  # <-- pass the processed list
             average_capacity=average_capacity,
             upcoming_capacity=upcoming_capacity
         )
