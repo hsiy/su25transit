@@ -188,7 +188,7 @@ def map_view():
         upcoming_capacity = get_upcoming_capacity(is_full_capacity)
 
         return render_template(
-            "map_display.html",
+            "map_display_v2.html",
             map_html=map_html,
             routes=routes,
             average_capacity=average_capacity,
