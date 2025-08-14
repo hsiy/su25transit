@@ -29,7 +29,7 @@
 <body>
     <div id="route-select-topbar" style="width:100%;background:#f8f8f8;padding:10px 0 10px 0;box-shadow:0 2px 4px rgba(0,0,0,0.04);position:sticky;top:0;z-index:1100;">
         <div style="max-width:900px;margin:0 auto;display:flex;align-items:center;gap:16px;">
-            <form action="/map" method="GET" id="route-form" style="display:inline;flex:1;">
+            <form action="/map" method="POST" id="route-form" style="display:inline;flex:1;">
                 <input type="hidden" name="latitude" value="{{ request.form.latitude or request.args.latitude or 41.2565 }}">
                 <input type="hidden" name="longitude" value="{{ request.form.longitude or request.args.longitude or -95.9345 }}">
                 <input type="hidden" name="show_favorites_only" id="show_favorites_only" value="{{ request.form.show_favorites_only or request.args.show_favorites_only or '' }}">
