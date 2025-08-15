@@ -29,9 +29,11 @@ jobs:
         run: |
           python -m venv venv
           source venv/bin/activate
+        working-directory: ./location_tracker
       
       - name: Install dependencies
-        run: cd location_tracker; pip install -r requirements.txt
+        run: pip install -r requirements.txt
+        working-directory: ./location_tracker
         
       # Optional: Add step to run tests here (PyTest, Django test suites, etc.)
 
@@ -40,7 +42,7 @@ jobs:
         with:
           name: python-app
           path: |
-            .
+            ./location_tracker
             !venv/
 
   deploy:
@@ -55,6 +57,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: python-app
+          path: ./location_tracker
       
       - name: Login to Azure
         uses: azure/login@v2
@@ -69,6 +72,8 @@ jobs:
         with:
           app-name: 'transitorytest'
           slot-name: 'Production'
+          package: ./location_tracker
 
           
+
 
